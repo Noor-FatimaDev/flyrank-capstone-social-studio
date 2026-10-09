@@ -60,6 +60,13 @@ resumes safely, and the idempotency key prevents duplicates.
 Chosen over a scheduling library because all state already lives in the
 database, restart safety is easy to prove, and the logic is easy to explain.
 
+## Database
+SQLite (single file, WAL mode, busy timeout enabled). Chosen over PostgreSQL
+because it needs no extra install, so a stranger can run the project with
+one command, and the scale is small. The UNIQUE constraint on
+idempotency_key works the same in SQLite. Trade-off: one writer at a time,
+so the API and worker both set a busy timeout instead of failing instantly.
+
 ## Constraint profiles
 Enforced by code in the service layer. A variant that breaks a rule is
 blocked before review, with an error naming the broken rule. Tone rules are
