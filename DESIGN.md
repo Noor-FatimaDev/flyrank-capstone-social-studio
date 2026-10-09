@@ -13,6 +13,8 @@ HTTP routes (thin) -> service layer (all rules) -> SocialPublisher interface
   between.
 - The service layer only talks to the `SocialPublisher` interface, never to
   a platform directly.
+- Constraint validation lives in `app/services/constraints.py` and does no
+  database or network work.
 
 ## Data model
 - posts(id, source_url, body_markdown, created_at): the single source of
@@ -64,8 +66,10 @@ database, restart safety is easy to prove, and the logic is easy to explain.
 SQLite (single file, WAL mode, busy timeout enabled). Chosen over PostgreSQL
 because it needs no extra install, so a stranger can run the project with
 one command, and the scale is small. The UNIQUE constraint on
-idempotency_key works the same in SQLite. Trade-off: one writer at a time,
-so the API and worker both set a busy timeout instead of failing instantly.
+idempotency_key works the same in SQLite. Foreign keys are switched on for
+every connection, because SQLite ignores them by default. Trade-off: one
+writer at a time, so the API and worker both set a busy timeout instead of
+failing instantly.
 
 ## Constraint profiles
 Enforced by code in the service layer. A variant that breaks a rule is
@@ -75,12 +79,20 @@ measurable proxies, since code cannot judge human tone.
 | Platform | Max length | Max hashtags | Tone rules |
 |---|---|---|---|
 | X-style | 280 chars | 2 | max 1 exclamation mark; no ALL-CAPS words over 4 letters; no banned words |
-| LinkedIn-style | 2000 chars | 5 | max 1 exclamation mark; no ALL-CAPS words; no banned words |
+| LinkedIn-style | 2000 chars | 5 | max 1 exclamation mark; no ALL-CAPS words of 2+ letters; no banned words |
 | Telegram | 4096 chars | 3 | max 3 exclamation marks; no ALL-CAPS words over 4 letters |
 
 Banned words (starter list): "guaranteed", "act now", "click here".
+Banned words apply to X-style and LinkedIn-style only. Hashtags are
+excluded from the ALL-CAPS check, so tags like #AI are allowed.
 Telegram's 4096 limit applies to message text, so variants are sent as plain
 text.
+
+### When validation runs
+`validate_variant(platform, text)` is a pure function that returns a list of
+every broken rule, so a user can fix all problems in one pass. It runs when
+a variant is generated, on every edit (PATCH), and again as a final gate at
+approval, because the text can change after the first check.
 
 ## Adapters
 `SocialPublisher.publish(variant) -> PublishResult` is the one interface.
