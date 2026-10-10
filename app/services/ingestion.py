@@ -3,12 +3,13 @@ from bs4 import BeautifulSoup
 from markdownify import markdownify
 
 from app.db.posts import create_post
+from app.services.errors import ServiceError
 
 FETCH_TIMEOUT_SECONDS = 10
 MAX_POST_CHARS = 100_000
 
 
-class IngestionError(Exception):
+class IngestionError(ServiceError):
     status_code = 400
 
 
