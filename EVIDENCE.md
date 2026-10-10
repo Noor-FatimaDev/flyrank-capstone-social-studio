@@ -63,13 +63,14 @@ Command (bad input, both url and markdown):
 ```
 Result: HTTP/1.1 422 Unprocessable Content, body `{"error":"Send exactly one of 'url' or 'markdown'"}`
 
-Meaning: the service raises typed exceptions and one handler in `main.py`
-turns each into JSON with its own status code. The route has no try/except.
-Malformed JSON is also rejected with a 422, never a 500.
+Meaning: the service raises typed exceptions (all subclasses of
+`ServiceError`) and one handler in `main.py` turns each into JSON with its
+own status code. The route has no try/except. Malformed JSON is also
+rejected with a 422, never a 500.
 
 ## 2. Constraint profiles enforced by code
-**Status:** validator done (`app/services/constraints.py`); not yet wired
-into generation or the edit/approve endpoints.
+**Status:** validator done and wired into variant generation. Not yet wired
+into the edit and approve endpoints (those are not built yet).
 
 ### A rule-breaking variant is reported with every broken rule named
 Command:
@@ -93,6 +94,38 @@ Result:
 []
 ```
 Meaning: a valid variant returns an empty list, so nothing is blocked.
+
+### One stored post produces different variants for different platforms
+Command:
+```
+python -c "from app.services.generation import generate_variants; import json; print(json.dumps(generate_variants(2), indent=2))"
+```
+Result (abridged to the variant text):
+```
+x:        "Hello: A test post. #blog"
+linkedin: "Hello\n\nA test post.\n\n#blog #writing"
+telegram: "Hello\n\nA test post."
+blocked:  []
+```
+Meaning: generation reads only the stored post (id 2) and builds a
+different variant for each platform. All three pass their constraint
+profiles, so all three are saved.
+
+### Generation blocks rule-breaking variants and reports them by name
+Command:
+```
+python -c "from app.services.ingestion import ingest_post; from app.services.generation import generate_variants; import json; pid = ingest_post(markdown='# Big news!!\n\nSomething happened today.'); print(json.dumps(generate_variants(pid), indent=2))"
+```
+Result (abridged):
+```
+created: [ telegram (id 4): "Big news!!\n\nSomething happened today." ]
+blocked: [ x:        "tone: 2 exclamation marks exceeds the x limit of 1",
+           linkedin: "tone: 2 exclamation marks exceeds the linkedin limit of 1" ]
+```
+Meaning: the title has two exclamation marks. X and LinkedIn allow only
+one, so those two variants are not saved and each error names the broken
+rule. Telegram allows three, so its variant passes and is saved. One
+failing platform does not block the others.
 
 ## 3. Review workflow (draft / approved / rejected / published)
 Pending.
