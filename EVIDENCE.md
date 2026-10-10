@@ -4,7 +4,7 @@ One proof per requirement box. Every command and result below was run
 locally from the repo root with the virtual environment active.
 
 ## 1. Ingestion
-**Status:** in progress (service written; HTTP route not built yet).
+**Status:** service and `POST /posts` route done.
 
 ### A valid pasted post is stored and its id returned
 Command:
@@ -28,9 +28,8 @@ Result (last line of the traceback):
 app.services.ingestion.UpstreamError: Could not fetch the URL: ConnectError
 ```
 Meaning: the low-level `httpx.ConnectError` (connection refused) was caught
-and re-raised as my own `UpstreamError`. That exception carries
-`status_code = 502`, which the route layer will return once the route
-exists. Nothing is stored when the fetch fails.
+and re-raised as my own `UpstreamError`, which carries `status_code = 502`.
+Nothing is stored when the fetch fails.
 
 ### An oversized post is rejected with a descriptive error and nothing is stored
 Command:
@@ -43,8 +42,30 @@ app.services.ingestion.PostTooLongError: The post is too long (100001 > 100000 c
 ```
 Meaning: the post is one character over the 100,000 limit, so it is
 rejected before anything is written to the database. The exception carries
-`status_code = 422`, which the route layer will return once the route
-exists.
+`status_code = 422`.
+
+### POST /posts over HTTP: success, upstream failure, and bad input
+Command (success):
+```
+'{"markdown": "# Hello\n\nA test post."}' | curl.exe -i -X POST http://127.0.0.1:8000/posts -H "Content-Type: application/json" --data-binary "@-"
+```
+Result: HTTP/1.1 201 Created, body `{"id":3}`
+
+Command (upstream failure):
+```
+'{"url": "https://localhost:9"}' | curl.exe -i -X POST http://127.0.0.1:8000/posts -H "Content-Type: application/json" --data-binary "@-"
+```
+Result: HTTP/1.1 502 Bad Gateway, body `{"error":"Could not fetch the URL: ConnectError"}`
+
+Command (bad input, both url and markdown):
+```
+'{"url": "https://example.com", "markdown": "x"}' | curl.exe -i -X POST http://127.0.0.1:8000/posts -H "Content-Type: application/json" --data-binary "@-"
+```
+Result: HTTP/1.1 422 Unprocessable Content, body `{"error":"Send exactly one of 'url' or 'markdown'"}`
+
+Meaning: the service raises typed exceptions and one handler in `main.py`
+turns each into JSON with its own status code. The route has no try/except.
+Malformed JSON is also rejected with a 422, never a 500.
 
 ## 2. Constraint profiles enforced by code
 **Status:** validator done (`app/services/constraints.py`); not yet wired
