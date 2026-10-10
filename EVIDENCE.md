@@ -151,7 +151,39 @@ Meaning: `NotFoundError` is a `ServiceError`, so the single handler in
 `main.py` returns a clean 404 instead of a 500.
 
 ## 3. Review workflow (draft / approved / rejected / published)
-Pending.
+**Status:** approve and edit proven over HTTP; reject and the schedule
+refusal are still to prove (schedule route not built yet).
+
+### Approving a draft works; approving it again is a 409
+Commands (variant 1 is post 2's X variant, starting as a draft):
+```
+curl.exe -i -X POST http://127.0.0.1:8000/variants/1/approve
+curl.exe -i -X POST http://127.0.0.1:8000/variants/1/approve
+```
+Results:
+```
+HTTP/1.1 200 OK
+{"id":1,"post_id":2,"platform":"x","text":"Hello: A test post. #blog","status":"approved","created_at":"2026-10-10 09:55:19"}
+
+HTTP/1.1 409 Conflict
+{"error":"Variant 1 is approved; only draft variants can be approved"}
+```
+Meaning: only a draft can be approved. A repeat call is refused with a 409
+that explains the current state, and the variant is left unchanged.
+
+### An edit that breaks the platform rules is rejected and not saved
+Command:
+```
+'{"text": "Edited text #a #b #c"}' | curl.exe -i -X PATCH http://127.0.0.1:8000/variants/1 -H "Content-Type: application/json" --data-binary "@-"
+```
+Result:
+```
+HTTP/1.1 422 Unprocessable Content
+{"error":"hashtags: 3 hashtags exceeds the x limit of 2"}
+```
+Meaning: validation runs on every edit, so the three-hashtag text is
+refused with the broken rule named, and the stored text is unchanged.
+
 
 ## 4. Adapter layer (SocialPublisher + 1 real + 2 mock, swap by config)
 Pending.
