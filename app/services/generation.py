@@ -1,4 +1,4 @@
-from app.db.variants import create_variant, get_post
+from app.db.variants import create_variant, get_post, has_active_variant
 from app.services.constraints import validate_variant
 from app.services.errors import NotFoundError
 
@@ -42,17 +42,28 @@ GENERATORS = {"x": _make_x, "linkedin": _make_linkedin, "telegram": _make_telegr
 def generate_variants(post_id: int) -> dict:
     """Build one variant per platform from the STORED post only.
 
-    Variants that break a constraint profile are not saved; they are
-    returned under 'blocked' with every broken rule named.
+    - A platform that already has a non-rejected variant is skipped, so
+      calling this twice never creates duplicates.
+    - A variant that breaks a constraint profile is not saved; it is
+      returned under 'blocked' with every broken rule named.
     """
     post = get_post(post_id)
     if post is None:
         raise NotFoundError(f"Post {post_id} not found")
 
     title, summary = _title_and_summary(post["body_markdown"])
-    created, blocked = [], []
+    created, blocked, skipped = [], [], []
 
     for platform, make in GENERATORS.items():
+        if has_active_variant(post_id, platform):
+            skipped.append(
+                {
+                    "platform": platform,
+                    "reason": "a non-rejected variant already exists",
+                }
+            )
+            continue
+
         text = make(title, summary, post["source_url"])
         errors = validate_variant(platform, text)
         if errors:
@@ -61,4 +72,4 @@ def generate_variants(post_id: int) -> dict:
             variant_id = create_variant(post_id, platform, text)
             created.append({"id": variant_id, "platform": platform, "text": text})
 
-    return {"created": created, "blocked": blocked}
+    return {"created": created, "blocked": blocked, "skipped": skipped}

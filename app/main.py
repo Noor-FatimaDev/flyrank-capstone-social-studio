@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.routes import posts
+from app.routes import posts, variants
 from app.services.errors import ServiceError
 
 app = FastAPI(title="Social Media Studio")
@@ -13,3 +13,4 @@ async def service_error_handler(request: Request, exc: ServiceError):
 
 
 app.include_router(posts.router)
+app.include_router(variants.router)

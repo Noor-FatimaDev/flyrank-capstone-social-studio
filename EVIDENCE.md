@@ -69,7 +69,8 @@ own status code. The route has no try/except. Malformed JSON is also
 rejected with a 422, never a 500.
 
 ## 2. Constraint profiles enforced by code
-**Status:** validator done and wired into variant generation. Not yet wired
+**Status:** validator done and wired into variant generation, which is
+idempotent and exposed at `POST /posts/{id}/variants/generate`. Not yet wired
 into the edit and approve endpoints (those are not built yet).
 
 ### A rule-breaking variant is reported with every broken rule named
@@ -126,6 +127,28 @@ Meaning: the title has two exclamation marks. X and LinkedIn allow only
 one, so those two variants are not saved and each error names the broken
 rule. Telegram allows three, so its variant passes and is saved. One
 failing platform does not block the others.
+
+### Calling generate twice creates no duplicates
+Command:
+```
+curl.exe -i -X POST http://127.0.0.1:8000/posts/2/variants/generate
+```
+Result: HTTP/1.1 200 OK, body
+```
+{"created":[],"blocked":[],"skipped":[{"platform":"x","reason":"a non-rejected variant already exists"},{"platform":"linkedin","reason":"a non-rejected variant already exists"},{"platform":"telegram","reason":"a non-rejected variant already exists"}]}
+```
+Meaning: post 2 already had all three variants from an earlier call, so the
+second call created nothing and said why. A platform whose variant was
+rejected can still be regenerated.
+
+### Generating for a post that does not exist is a clean 404
+Command:
+```
+curl.exe -i -X POST http://127.0.0.1:8000/posts/999/variants/generate
+```
+Result: HTTP/1.1 404 Not Found, body `{"error":"Post 999 not found"}`
+Meaning: `NotFoundError` is a `ServiceError`, so the single handler in
+`main.py` returns a clean 404 instead of a 500.
 
 ## 3. Review workflow (draft / approved / rejected / published)
 Pending.
