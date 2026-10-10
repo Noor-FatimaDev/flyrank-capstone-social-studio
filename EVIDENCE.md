@@ -150,9 +150,22 @@ Result: HTTP/1.1 404 Not Found, body `{"error":"Post 999 not found"}`
 Meaning: `NotFoundError` is a `ServiceError`, so the single handler in
 `main.py` returns a clean 404 instead of a 500.
 
+### A rejected platform can be regenerated without touching the others
+Command (after variant 2, post 2's LinkedIn variant, was rejected):
+```
+curl.exe -i -X POST http://127.0.0.1:8000/posts/2/variants/generate
+```
+Result: HTTP/1.1 200 OK, body
+```
+{"created":[{"id":5,"platform":"linkedin","text":"Hello\n\nA test post.\n\n#blog #writing"}],"blocked":[],"skipped":[{"platform":"x","reason":"a non-rejected variant already exists"},{"platform":"telegram","reason":"a non-rejected variant already exists"}]}
+```
+Meaning: only the platform with no live variant gets a new one. X and
+Telegram still have non-rejected variants, so they are skipped and no
+duplicates are created.
+
 ## 3. Review workflow (draft / approved / rejected / published)
-**Status:** approve and edit proven over HTTP; reject and the schedule
-refusal are still to prove (schedule route not built yet).
+**Status:** approve, edit and reject proven over HTTP; the schedule refusal
+is still to prove (schedule route not built yet).
 
 ### Approving a draft works; approving it again is a 409
 Commands (variant 1 is post 2's X variant, starting as a draft):
@@ -184,6 +197,37 @@ HTTP/1.1 422 Unprocessable Content
 Meaning: validation runs on every edit, so the three-hashtag text is
 refused with the broken rule named, and the stored text is unchanged.
 
+
+### A valid edit sends the variant back to draft
+Command (variant 1 was approved):
+```
+'{"text": "Edited text #a"}' | curl.exe -i -X PATCH http://127.0.0.1:8000/variants/1 -H "Content-Type: application/json" --data-binary "@-"
+```
+Result:
+```
+HTTP/1.1 200 OK
+{"id":1,"post_id":2,"platform":"x","text":"Edited text #a","status":"draft","created_at":"2026-10-10 09:55:19"}
+```
+Meaning: editing an approved variant replaces the text and returns it to
+draft, so changed text must be reviewed and approved again before it can be
+scheduled.
+
+### Rejecting works once; rejecting again is a 409
+Commands (variant 2 is post 2's LinkedIn variant):
+```
+curl.exe -i -X POST http://127.0.0.1:8000/variants/2/reject
+curl.exe -i -X POST http://127.0.0.1:8000/variants/2/reject
+```
+Results:
+```
+HTTP/1.1 200 OK
+{"id":2,"post_id":2,"platform":"linkedin","text":"Hello\n\nA test post.\n\n#blog #writing","status":"rejected","created_at":"2026-10-10 09:55:19"}
+
+HTTP/1.1 409 Conflict
+{"error":"Variant 2 is rejected; only draft or approved variants can be rejected"}
+```
+Meaning: a draft or approved variant can be rejected. A rejected variant is
+final, and a repeat call is refused with a 409 that names its state.
 
 ## 4. Adapter layer (SocialPublisher + 1 real + 2 mock, swap by config)
 Pending.

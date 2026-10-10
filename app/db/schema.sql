@@ -43,3 +43,7 @@ CREATE TABLE IF NOT EXISTS publish_attempts (
 CREATE INDEX IF NOT EXISTS idx_slots_scheduled_at ON slots(scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_variants_post_id ON variants(post_id);
 CREATE INDEX IF NOT EXISTS idx_attempts_publish_id ON publish_attempts(publish_id);
+
+-- The same variant cannot have two slots at the same time.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_slots_variant_time
+    ON slots(variant_id, scheduled_at);
