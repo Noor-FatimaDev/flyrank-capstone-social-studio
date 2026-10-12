@@ -29,14 +29,14 @@ def _make_linkedin(title: str, summary: str, url: str | None) -> str:
     return _shorten(text, 1900) + "\n\n#blog #writing"
 
 
-def _make_telegram(title: str, summary: str, url: str | None) -> str:
+def _make_discord(title: str, summary: str, url: str | None) -> str:
     text = f"{title}\n\n{summary}" if summary else title
     if url:
         text += f"\n\n{url}"
-    return _shorten(text, 4000)
+    return _shorten(text, 1900)  # Discord allows 2000 characters per message
 
 
-GENERATORS = {"x": _make_x, "linkedin": _make_linkedin, "telegram": _make_telegram}
+GENERATORS = {"x": _make_x, "linkedin": _make_linkedin, "discord": _make_discord}
 
 
 def generate_variants(post_id: int) -> dict:

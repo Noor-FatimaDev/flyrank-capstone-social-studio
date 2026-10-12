@@ -40,6 +40,17 @@ CREATE TABLE IF NOT EXISTS publish_attempts (
     attempted_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- What the mock adapters WOULD have posted. Deliberately NOT unique on
+-- idempotency_key, so a duplicate publish would be visible as two rows.
+CREATE TABLE IF NOT EXISTS mock_posts (
+    id INTEGER PRIMARY KEY,
+    adapter TEXT NOT NULL,
+    variant_id INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_slots_scheduled_at ON slots(scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_variants_post_id ON variants(post_id);
 CREATE INDEX IF NOT EXISTS idx_attempts_publish_id ON publish_attempts(publish_id);

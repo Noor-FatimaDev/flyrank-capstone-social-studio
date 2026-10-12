@@ -164,8 +164,8 @@ Telegram still have non-rejected variants, so they are skipped and no
 duplicates are created.
 
 ## 3. Review workflow (draft / approved / rejected / published)
-**Status:** approve, edit and reject proven over HTTP; the schedule refusal
-is still to prove (schedule route not built yet).
+**Status:** approve, edit, reject and scheduling (including the refusal of
+unapproved variants) proven over HTTP.
 
 ### Approving a draft works; approving it again is a 409
 Commands (variant 1 is post 2's X variant, starting as a draft):
@@ -229,8 +229,79 @@ HTTP/1.1 409 Conflict
 Meaning: a draft or approved variant can be rejected. A rejected variant is
 final, and a repeat call is refused with a 409 that names its state.
 
+### Scheduling: unapproved variants are refused, approved ones can be scheduled
+Commands (variant 1 starts as a draft; run in this order):
+```
+'{"scheduled_at": "2026-10-12T09:00:00Z"}' | curl.exe -i -X POST http://127.0.0.1:8000/variants/1/schedule -H "Content-Type: application/json" --data-binary "@-"
+curl.exe -i -X POST http://127.0.0.1:8000/variants/1/approve
+'{"scheduled_at": "2026-10-12T09:00:00Z"}' | curl.exe -i -X POST http://127.0.0.1:8000/variants/1/schedule -H "Content-Type: application/json" --data-binary "@-"
+```
+Results:
+```
+HTTP/1.1 409 Conflict
+{"error":"Variant 1 is draft; only approved variants can be scheduled"}
+
+HTTP/1.1 200 OK   (approve)
+{"id":1,"post_id":2,"platform":"x","text":"Edited text #a","status":"approved","created_at":"2026-10-10 09:55:19"}
+
+HTTP/1.1 201 Created
+{"slot_id":1,"variant_id":1,"scheduled_at":"2026-10-12T09:00:00Z","created":true}
+```
+Meaning: scheduling a draft is refused with a 4xx and an error naming the
+status. After approval the same request creates a slot.
+
+### Scheduling the same variant and time twice creates no second slot
+Command (repeat of the successful request above):
+```
+'{"scheduled_at": "2026-10-12T09:00:00Z"}' | curl.exe -i -X POST http://127.0.0.1:8000/variants/1/schedule -H "Content-Type: application/json" --data-binary "@-"
+```
+Result:
+```
+HTTP/1.1 200 OK
+{"slot_id":1,"variant_id":1,"scheduled_at":"2026-10-12T09:00:00Z","created":false}
+```
+Meaning: the same slot id comes back with `created: false`. A UNIQUE index on
+`slots(variant_id, scheduled_at)` makes the database decide, so a double
+click cannot create two slots (which would have two different idempotency
+keys and so two posts).
+
+### A time in the past is refused
+Command:
+```
+'{"scheduled_at": "2020-01-01T09:00:00Z"}' | curl.exe -i -X POST http://127.0.0.1:8000/variants/1/schedule -H "Content-Type: application/json" --data-binary "@-"
+```
+Result:
+```
+HTTP/1.1 422 Unprocessable Content
+{"error":"scheduled_at must be in the future"}
+```
+Meaning: bad input gets a clean 422 with a message. Times are stored as UTC
+in one fixed format so the worker can compare them reliably.
+
 ## 4. Adapter layer (SocialPublisher + 1 real + 2 mock, swap by config)
-Pending.
+**Status:** interface, both mock adapters and the registry done; mock proven.
+Telegram adapter written, real-channel proof and config-swap proof still to
+add.
+
+### A mock adapter publishes through the interface and records what it would post
+Commands:
+```
+python -m app.db.init_db
+python -c "from app.adapters.registry import get_publisher; p = get_publisher('x'); print(p.name, p.publish({'id': 1, 'text': 'hello #a'}, 'v1:s1'))"
+python -c "from app.db.mock_posts import list_mock_posts; print(list_mock_posts())"
+```
+Results:
+```
+Database initialised.
+mock_x PublishResult(outcome=<Outcome.POSTED: 'posted'>, message_id='mock_x-1', error=None, retry_after=None)
+[{'id': 1, 'adapter': 'mock_x', 'variant_id': 1, 'text': 'hello #a', 'idempotency_key': 'v1:s1', 'created_at': '2026-10-12 18:58:53'}]
+```
+Meaning: the app asks the registry for the adapter configured for platform
+"x" and calls `publish()` on the interface. The mock returns a `POSTED`
+result and records the post in the `mock_posts` table. That table is not
+unique on the idempotency key, so a duplicate publish would show up as two
+rows.
+
 
 ## 5. Idempotent publish (same variant + slot never posts twice)
 Pending.

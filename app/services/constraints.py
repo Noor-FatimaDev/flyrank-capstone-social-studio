@@ -17,7 +17,7 @@ class Profile:
 PROFILES = {
     "x": Profile(280, 2, 1, 5, BANNED_WORDS),
     "linkedin": Profile(2000, 5, 1, 2, BANNED_WORDS),
-    "telegram": Profile(4096, 3, 3, 5),
+    "discord": Profile(2000, 3, 3, 5),
 }
 
 

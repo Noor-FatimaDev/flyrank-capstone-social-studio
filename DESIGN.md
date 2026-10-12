@@ -2,8 +2,8 @@
 
 ## Problem
 Turn one blog post into per-platform social variants, have a human approve
-each one, and publish each approved variant exactly once at a scheduled time,
-even under retries and worker crashes.
+each one, and publish each approved variant at a scheduled time, even under
+retries and worker crashes.
 
 ## Layers
 HTTP routes (thin) -> service layer (all rules) -> SocialPublisher interface
@@ -36,9 +36,13 @@ one row per try.
   UNIQUE constraint.
 - Insert the publish row as `in_progress` BEFORE calling the platform.
   Update to `succeeded` or `failed` after.
-- The UNIQUE constraint stops two workers claiming the same publish.
+- The UNIQUE constraint is intended to stop two workers claiming the same
+  publish.
 - A retry of a key already `succeeded` skips posting and returns the
   original result.
+- The publishing service manages idempotency. Passing an idempotency key
+  to an adapter does not, by itself, guarantee that the destination
+  platform will deduplicate requests.
 
 ## Failure handling
 | Outcome | Did it post? | Action |
@@ -50,59 +54,71 @@ one row per try.
 A row stuck in `in_progress` longer than STALE_AFTER_SECONDS (300) is
 treated as stale and moved to `uncertain`. A duplicate post is worse than a
 missed one, so when unsure the system holds back rather than re-sends.
-Telegram allows about 1 message per second per chat, so two variants due in
-the same slot are sent with a delay between them.
+
+Discord webhooks are rate limited. The implementation should respect
+Discord's returned rate-limit information and avoid sending too quickly.
+Any configured delay between posts is a pacing measure, not a guarantee
+that rate limits will never occur.
 
 ## Scheduler
-A worker loop that polls the database every POLL_INTERVAL_SECONDS (5) for
+A worker loop polls the database every POLL_INTERVAL_SECONDS (5) for
 slots whose `scheduled_at` has passed and whose publish is not yet
 `succeeded`. Because all state lives in the database, a restarted worker
-resumes safely, and the idempotency key prevents duplicates.
+can resume from stored state. Duplicate prevention depends on the database
+constraints and publishing-service logic, not on the Discord webhook itself.
 
 Chosen over a scheduling library because all state already lives in the
-database, restart safety is easy to prove, and the logic is easy to explain.
+database, restart behavior is easier to explain, and the logic is easy to
+inspect directly.
 
 ## Database
 SQLite (single file, WAL mode, busy timeout enabled). Chosen over PostgreSQL
-because it needs no extra install, so a stranger can run the project with
-one command, and the scale is small. The UNIQUE constraint on
-idempotency_key works the same in SQLite. Foreign keys are switched on for
-every connection, because SQLite ignores them by default. Trade-off: one
-writer at a time, so the API and worker both set a busy timeout instead of
-failing instantly.
+because it needs no extra database server installation, so a stranger can
+run the project locally with less setup, and the scale is small. The UNIQUE
+constraint on `idempotency_key` is enforced by SQLite. Foreign keys are
+switched on for every connection, because SQLite ignores them by default.
+Trade-off: one writer at a time, so the API and worker both set a busy
+timeout instead of failing instantly.
 
 ## Constraint profiles
 Enforced by code in the service layer. A variant that breaks a rule is
 blocked before review, with an error naming the broken rule. Tone rules are
-measurable proxies, since code cannot judge human tone.
+measurable proxies, since code cannot judge human tone perfectly.
 
 | Platform | Max length | Max hashtags | Tone rules |
 |---|---|---|---|
 | X-style | 280 chars | 2 | max 1 exclamation mark; no ALL-CAPS words over 4 letters; no banned words |
 | LinkedIn-style | 2000 chars | 5 | max 1 exclamation mark; no ALL-CAPS words of 2+ letters; no banned words |
-| Telegram | 4096 chars | 3 | max 3 exclamation marks; no ALL-CAPS words over 4 letters |
+| Discord | 2000 chars | 3 | max 3 exclamation marks; no ALL-CAPS words over 4 letters |
 
 Banned words (starter list): "guaranteed", "act now", "click here".
 Banned words apply to X-style and LinkedIn-style only. Hashtags are
 excluded from the ALL-CAPS check, so tags like #AI are allowed.
-Telegram's 4096 limit applies to message text, so variants are sent as plain
-text.
+Discord's 2000-character limit applies to message content, so variants are
+sent as plain text.
 
 ### When validation runs
 `validate_variant(platform, text)` is a pure function that returns a list of
-every broken rule, so a user can fix all problems in one pass. It runs when
-a variant is generated, on every edit (PATCH), and again as a final gate at
-approval, because the text can change after the first check.
+every broken rule, so a user can fix all problems in one pass. It runs
+when a variant is generated, on every edit (PATCH), and again as a final
+gate at approval, because the text can change after the first check.
 
 ## Adapters
-`SocialPublisher.publish(variant) -> PublishResult` is the one interface.
-- TelegramPublisher (real)
+`SocialPublisher.publish(variant, idempotency_key) -> PublishResult` is
+the one interface.
+- DiscordPublisher (real: a Discord webhook)
 - MockXPublisher and MockLinkedInPublisher (record what they would post in
   the database and show a preview)
 
 Adapter choice comes from configuration (for example
-PUBLISH_ADAPTER_X=telegram or mock_x), so swapping adapters changes config,
-not business logic.
+PUBLISH_ADAPTER_X=mock_x or PUBLISH_ADAPTER_DISCORD=discord), so swapping
+adapters changes config, not business logic.
+
+Why Discord: Telegram was the first choice, but api.telegram.org was
+unreachable from my network (the connection timed out), so the real target
+is a Discord webhook instead. The adapter layer made this a one-adapter
+change. The webhook URL is a secret and is kept in `.env` only. It must
+never be committed to Git, printed in logs, or included in error messages.
 
 ## API surface
 - POST /posts: ingest a URL or pasted Markdown
