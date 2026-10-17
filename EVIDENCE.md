@@ -97,20 +97,17 @@ Result:
 Meaning: a valid variant returns an empty list, so nothing is blocked.
 
 ### One stored post produces different variants for different platforms
-Command:
+Command (fresh database, post 1 already ingested):
 ```
-python -c "from app.services.generation import generate_variants; import json; print(json.dumps(generate_variants(2), indent=2))"
+curl.exe -i -X POST http://127.0.0.1:8000/posts/1/variants/generate
 ```
-Result (abridged to the variant text):
+Result: HTTP/1.1 200 OK, body
 ```
-x:        "Hello: A test post. #blog"
-linkedin: "Hello\n\nA test post.\n\n#blog #writing"
-telegram: "Hello\n\nA test post."
-blocked:  []
+{"created":[{"id":1,"platform":"x","text":"Hello: A test post. #blog"},{"id":2,"platform":"linkedin","text":"Hello\n\nA test post.\n\n#blog #writing"},{"id":3,"platform":"discord","text":"Hello\n\nA test post."}],"blocked":[],"skipped":[]}
 ```
-Meaning: generation reads only the stored post (id 2) and builds a
-different variant for each platform. All three pass their constraint
-profiles, so all three are saved.
+Meaning: generation reads only the stored post and builds a different
+variant for each platform. All three pass their constraint profiles, so all
+three are saved.
 
 ### Generation blocks rule-breaking variants and reports them by name
 Command:
@@ -128,6 +125,8 @@ one, so those two variants are not saved and each error names the broken
 rule. Telegram allows three, so its variant passes and is saved. One
 failing platform does not block the others.
 
+Note: captured before the real target changed from Telegram to Discord. The platform now named `discord` was then called `telegram`; its tone limits were the same, so the behaviour shown is identical.
+
 ### Calling generate twice creates no duplicates
 Command:
 ```
@@ -140,6 +139,8 @@ Result: HTTP/1.1 200 OK, body
 Meaning: post 2 already had all three variants from an earlier call, so the
 second call created nothing and said why. A platform whose variant was
 rejected can still be regenerated.
+
+Note: captured before the real target changed from Telegram to Discord. The platform now named `discord` was then called `telegram`; its tone limits were the same, so the behaviour shown is identical.
 
 ### Generating for a post that does not exist is a clean 404
 Command:
@@ -162,6 +163,8 @@ Result: HTTP/1.1 200 OK, body
 Meaning: only the platform with no live variant gets a new one. X and
 Telegram still have non-rejected variants, so they are skipped and no
 duplicates are created.
+
+Note: captured before the real target changed from Telegram to Discord. The platform now named `discord` was then called `telegram`; its tone limits were the same, so the behaviour shown is identical.
 
 ## 3. Review workflow (draft / approved / rejected / published)
 **Status:** approve, edit, reject and scheduling (including the refusal of
@@ -280,7 +283,7 @@ in one fixed format so the worker can compare them reliably.
 
 ## 4. Adapter layer (SocialPublisher + 1 real + 2 mock, swap by config)
 **Status:** interface, both mock adapters and the registry done; mock proven.
-Telegram adapter written, real-channel proof and config-swap proof still to
+Discord adapter written; real-channel proof and config-swap proof still to
 add.
 
 ### A mock adapter publishes through the interface and records what it would post
@@ -304,13 +307,74 @@ rows.
 
 
 ## 5. Idempotent publish (same variant + slot never posts twice)
-Pending.
+**Status:** proven with the mock adapter. Real Discord proof and the
+worker-crash proof (section 6) still to add.
+
+### Publishing the same slot twice sends exactly once
+Setup (fresh database): post 1 ingested, variants generated, variants 1 (x)
+and 3 (discord) approved and scheduled for 2026-10-20T09:00:00Z, which
+created slots 1 and 2.
+
+Commands:
+```
+curl.exe -i -X POST http://127.0.0.1:8000/slots/1/publish
+curl.exe -i -X POST http://127.0.0.1:8000/slots/1/publish
+python -c "from app.db.mock_posts import list_mock_posts; print(list_mock_posts())"
+```
+Results:
+```
+HTTP/1.1 200 OK
+{"publish_id":1,"status":"succeeded","platform_message_id":"mock_x-1","sent_now":true,"note":null}
+
+HTTP/1.1 200 OK
+{"publish_id":1,"status":"succeeded","platform_message_id":"mock_x-1","sent_now":false,"note":"not sent: already handled"}
+
+[{'id': 1, 'adapter': 'mock_x', 'variant_id': 1, 'text': 'Hello: A test post. #blog', 'idempotency_key': 'v1:s1', 'created_at': '2026-10-17 21:28:08'}]
+```
+Meaning: the first call claims the publish (UNIQUE idempotency key `v1:s1`),
+sends through the adapter, and records `succeeded`. The second call cannot
+claim it, so it sends nothing and returns the original result. The mock
+records every send and is not unique on the key, so exactly one row proves
+exactly one send.
+
+### A published variant cannot be approved again
+Command:
+```
+curl.exe -i -X POST http://127.0.0.1:8000/variants/1/approve
+```
+Result:
+```
+HTTP/1.1 409 Conflict
+{"error":"Variant 1 is published; only draft variants can be approved"}
+```
+Meaning: after a successful publish the variant is `published`, and approving
+it again is refused, so it cannot be put back in the scheduler's path.
+
 
 ## 6. Durable scheduling (worker restart mid-batch, zero duplicates)
 Pending.
 
 ## 7. Publish history
-Pending.
+**Status:** endpoints proven; will extend after the worker runs.
+
+### Every publish and every attempt is visible
+Commands:
+```
+curl.exe -i http://127.0.0.1:8000/publishes
+curl.exe -i http://127.0.0.1:8000/publishes/1/attempts
+```
+Results:
+```
+HTTP/1.1 200 OK
+[{"id":1,"variant_id":1,"slot_id":1,"idempotency_key":"v1:s1","status":"succeeded","started_at":"2026-10-17T21:28:08Z","retry_at":null,"platform_message_id":"mock_x-1"}]
+
+HTTP/1.1 200 OK
+[{"id":1,"publish_id":1,"result":"posted","error":null,"attempted_at":"2026-10-17 21:28:08"}]
+```
+Meaning: one publish row for the variant and slot (one success), and one
+attempt row with its result. Retries would add attempt rows without ever
+adding a second publish row.
+
 
 ## 8. Secrets clean
 Pending: `.env` is git-ignored and `.env.example` holds placeholders only.
