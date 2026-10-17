@@ -23,3 +23,12 @@ def insert_slot_if_new(variant_id: int, scheduled_at: str) -> tuple[int, bool]:
         return row["id"], created
     finally:
         conn.close()
+
+
+def get_slot(slot_id: int) -> dict | None:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()

@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS publishes (
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'in_progress', 'succeeded', 'failed', 'uncertain')),
     started_at TEXT,
+    retry_at TEXT,
     platform_message_id TEXT
 );
 
