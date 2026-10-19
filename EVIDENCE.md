@@ -283,8 +283,7 @@ in one fixed format so the worker can compare them reliably.
 
 ## 4. Adapter layer (SocialPublisher + 1 real + 2 mock, swap by config)
 **Status:** interface, both mock adapters and the registry done; mock proven.
-Discord adapter written; real-channel proof and config-swap proof still to
-add.
+Discord adapter proven against a real channel; config-swap proof still to add.
 
 ### A mock adapter publishes through the interface and records what it would post
 Commands:
@@ -306,9 +305,32 @@ unique on the idempotency key, so a duplicate publish would show up as two
 rows.
 
 
+### The real Discord adapter posts to a live channel, once
+Command (variant 3 is the discord variant, scheduled as slot 2; the webhook
+URL lives only in `.env` and is not shown here):
+```
+curl.exe -i -X POST http://127.0.0.1:8000/slots/2/publish
+curl.exe -i -X POST http://127.0.0.1:8000/slots/2/publish
+```
+Results:
+```
+HTTP/1.1 200 OK
+{"publish_id":2,"status":"succeeded","platform_message_id":"1561129731514966170","sent_now":true,"note":null}
+
+HTTP/1.1 200 OK
+{"publish_id":2,"status":"succeeded","platform_message_id":"1561129731514966170","sent_now":false,"note":"not sent: already handled"}
+```
+Meaning: the first call sent the message through the Discord webhook and
+stored Discord's own message id as `platform_message_id`, so the publish
+record links to the live message. The second call sent nothing and returned
+the same record.
+
+Channel check: I opened the Discord channel and the published message is
+there.
+
 ## 5. Idempotent publish (same variant + slot never posts twice)
-**Status:** proven with the mock adapter. Real Discord proof and the
-worker-crash proof (section 6) still to add.
+**Status:** proven with the mock adapter and with the real Discord adapter.
+The worker-crash proof (section 6) is still to add.
 
 ### Publishing the same slot twice sends exactly once
 Setup (fresh database): post 1 ingested, variants generated, variants 1 (x)
