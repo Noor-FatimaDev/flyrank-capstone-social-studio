@@ -32,3 +32,23 @@ def get_slot(slot_id: int) -> dict | None:
         return dict(row) if row else None
     finally:
         conn.close()
+
+
+def list_due_slots(now: str, limit: int = 20) -> list[int]:
+    """Slots that are due AND still need work: no publish yet, or a publish
+    waiting to retry whose retry time has passed. Finished, failed, uncertain
+    and in-progress slots are not returned."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT s.id FROM slots s "
+            "LEFT JOIN publishes p ON p.slot_id = s.id "
+            "WHERE s.scheduled_at <= ? "
+            "AND (p.id IS NULL OR (p.status = 'pending' "
+            "AND (p.retry_at IS NULL OR p.retry_at <= ?))) "
+            "ORDER BY s.scheduled_at, s.id LIMIT ?",
+            (now, now, limit),
+        ).fetchall()
+        return [r["id"] for r in rows]
+    finally:
+        conn.close()

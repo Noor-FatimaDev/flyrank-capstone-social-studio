@@ -15,6 +15,18 @@ def record_mock_post(adapter: str, variant_id: int, text: str, idempotency_key: 
         conn.close()
 
 
+def find_mock_post(idempotency_key: str) -> dict | None:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM mock_posts WHERE idempotency_key = ? ORDER BY id LIMIT 1",
+            (idempotency_key,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def list_mock_posts() -> list[dict]:
     conn = get_connection()
     try:

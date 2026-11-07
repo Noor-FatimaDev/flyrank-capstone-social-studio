@@ -75,17 +75,32 @@ def record_attempt(publish_id: int, result: str, error: str | None) -> None:
         conn.close()
 
 
-def sweep_stale(cutoff: str) -> int:
-    """Mark in_progress publishes started at or before cutoff as 'uncertain'."""
+def list_stale(cutoff: str) -> list[dict]:
+    """Publishes still in_progress that started at or before cutoff."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM publishes WHERE status = 'in_progress' AND started_at <= ? "
+            "ORDER BY id",
+            (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def reopen_publish(publish_id: int) -> bool:
+    """Put a stale in_progress publish back to pending so it can be retried.
+    Only used when the adapter has proven the post was NOT made."""
     conn = get_connection()
     try:
         cur = conn.execute(
-            "UPDATE publishes SET status = 'uncertain' "
-            "WHERE status = 'in_progress' AND started_at <= ?",
-            (cutoff,),
+            "UPDATE publishes SET status = 'pending', retry_at = NULL "
+            "WHERE id = ? AND status = 'in_progress'",
+            (publish_id,),
         )
         conn.commit()
-        return cur.rowcount
+        return cur.rowcount == 1
     finally:
         conn.close()
 

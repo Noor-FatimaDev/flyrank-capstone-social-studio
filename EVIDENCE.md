@@ -283,7 +283,7 @@ in one fixed format so the worker can compare them reliably.
 
 ## 4. Adapter layer (SocialPublisher + 1 real + 2 mock, swap by config)
 **Status:** interface, both mock adapters and the registry done; mock proven.
-Discord adapter proven against a real channel; config-swap proof still to add.
+All adapters proven: the mocks, the real Discord adapter, and the config swap.
 
 ### A mock adapter publishes through the interface and records what it would post
 Commands:
@@ -327,6 +327,24 @@ the same record.
 
 Channel check: I opened the Discord channel and the published message is
 there.
+
+### Swapping the adapter in configuration publishes the same campaign through the mock
+Commands (the setting is for this terminal session only; no code changed):
+```
+$env:PUBLISH_ADAPTER_DISCORD="mock_x"
+python -c "from app.services.ingestion import ingest_post; from app.services.generation import generate_variants; from app.services.review import approve_variant; from app.services.scheduling import schedule_variant; from app.services.publishing import publish_slot; pid = ingest_post(markdown='# Swap test\n\nSame campaign, different adapter.'); v = [x for x in generate_variants(pid)['created'] if x['platform'] == 'discord'][0]; approve_variant(v['id']); s = schedule_variant(v['id'], '2026-10-25T09:00:00Z'); print(publish_slot(s['slot_id']))"
+Remove-Item Env:PUBLISH_ADAPTER_DISCORD
+python -c "from app.db.mock_posts import list_mock_posts; print(list_mock_posts())"
+```
+Results:
+```
+{'publish_id': 3, 'status': 'succeeded', 'platform_message_id': 'mock_x-2', 'sent_now': True, 'note': None}
+[{'id': 1, 'adapter': 'mock_x', 'variant_id': 1, 'text': 'Hello: A test post. #blog', 'idempotency_key': 'v1:s1', 'created_at': '2026-10-17 21:28:08'}, {'id': 2, 'adapter': 'mock_x', 'variant_id': 6, 'text': 'Swap test\n\nSame campaign, different adapter.', 'idempotency_key': 'v6:s3', 'created_at': '2026-10-19 18:54:23'}]
+```
+Meaning: with `PUBLISH_ADAPTER_DISCORD=mock_x`, a discord-platform variant is
+published through the mock: the message id is `mock_x-2` (not a Discord id)
+and the post is recorded in `mock_posts`. Only configuration changed; no code
+outside the adapters was touched.
 
 ## 5. Idempotent publish (same variant + slot never posts twice)
 **Status:** proven with the mock adapter and with the real Discord adapter.

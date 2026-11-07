@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from app.adapters.base import Outcome, PublishResult
+from app.adapters.base import Lookup, Outcome, PublishResult
 from app.adapters.registry import get_publisher
 from app.config import STALE_AFTER_SECONDS
 from app.db.publishes import (
@@ -10,7 +10,9 @@ from app.db.publishes import (
     get_publish_by_key,
     list_attempts,
     list_publishes,
+    list_stale,
     record_attempt,
+    reopen_publish,
 )
 from app.db.slots import get_slot
 from app.db.variants import get_variant, transition_status
@@ -41,6 +43,53 @@ def _summary(publish: dict, sent: bool, note: str | None = None) -> dict:
     }
 
 
+def recover_publish(publish: dict) -> None:
+    """Settle a stale in_progress publish WITHOUT ever blindly re-sending.
+
+    Ask the adapter whether the post went out:
+      found      -> mark succeeded (it is live; do not send again)
+      not found  -> provably not posted, so put it back to pending for a retry
+      cannot tell-> mark uncertain and leave it for a human
+    Every change is guarded by 'still in_progress', so two workers recovering
+    the same row cannot both act on it.
+    """
+    variant = get_variant(publish["variant_id"])
+    if variant is None:
+        return
+    found = get_publisher(variant["platform"]).lookup(publish["idempotency_key"])
+
+    if found.status == Lookup.FOUND:
+        if finish_publish(publish["id"], "succeeded", message_id=found.message_id):
+            record_attempt(
+                publish["id"],
+                "recovered",
+                "post found after a crash; marked succeeded without re-sending",
+            )
+            transition_status(variant["id"], ("approved",), "published")
+    elif found.status == Lookup.NOT_FOUND:
+        if reopen_publish(publish["id"]):
+            record_attempt(
+                publish["id"], "recovered", "post not found after a crash; will retry"
+            )
+    else:
+        if finish_publish(publish["id"], "uncertain"):
+            record_attempt(
+                publish["id"],
+                "stale",
+                "stuck in_progress past the timeout; outcome unknown, "
+                "needs a human check",
+            )
+
+
+def recover_stale_publishes() -> int:
+    """Called by the worker on every poll. Returns how many stale rows it saw."""
+    cutoff = _fmt(_now() - timedelta(seconds=STALE_AFTER_SECONDS))
+    stale = list_stale(cutoff)
+    for publish in stale:
+        recover_publish(publish)
+    return len(stale)
+
+
 def publish_slot(slot_id: int) -> dict:
     """Publish one slot, at most once.
 
@@ -50,7 +99,7 @@ def publish_slot(slot_id: int) -> dict:
     3. Call the adapter through the SocialPublisher interface.
     4. Record the attempt and the final status.
     A crash between 3 and 4 leaves the row in_progress; it later goes stale
-    and becomes 'uncertain', and is never blindly re-sent.
+    and recover_publish settles it without blindly re-sending.
     """
     slot = get_slot(slot_id)
     if slot is None:
@@ -72,12 +121,8 @@ def publish_slot(slot_id: int) -> dict:
         # sent by someone else. Never send again.
         if publish["status"] == "in_progress" and publish["started_at"]:
             age = (now - _parse(publish["started_at"])).total_seconds()
-            if age > STALE_AFTER_SECONDS and finish_publish(publish["id"], "uncertain"):
-                record_attempt(
-                    publish["id"],
-                    "stale",
-                    "stuck in_progress past the timeout; outcome unknown",
-                )
+            if age > STALE_AFTER_SECONDS:
+                recover_publish(publish)
                 publish = get_publish_by_key(key)
         return _summary(publish, sent=False, note="not sent: already handled")
 
