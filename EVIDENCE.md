@@ -348,7 +348,7 @@ outside the adapters was touched.
 
 ## 5. Idempotent publish (same variant + slot never posts twice)
 **Status:** proven with the mock adapter and with the real Discord adapter.
-The worker-crash proof (section 6) is still to add.
+The worker-crash proof is in section 6.
 
 ### Publishing the same slot twice sends exactly once
 Setup (fresh database): post 1 ingested, variants generated, variants 1 (x)
@@ -392,10 +392,139 @@ it again is refused, so it cannot be put back in the scheduler's path.
 
 
 ## 6. Durable scheduling (worker restart mid-batch, zero duplicates)
-Pending.
+**Status:** proven for a crash in the middle of a publish, using the mock
+adapter. Limits are listed at the end of this section.
+
+### A normal batch of six slots publishes each slot once, and a restart sends nothing again
+Setup: `seed.py` creates six approved slots that are due immediately; the
+worker polls the database every 5 seconds.
+
+Commands:
+```
+python seed.py
+python worker.py
+python worker.py
+```
+Result: the first run logged `slot 1` to `slot 6 -> succeeded
+(sent_now=True)`, one line each. The second run, started after it, sent
+nothing.
+
+Meaning: each due slot is published once, and a restart finds no work left,
+so a clean restart creates no duplicates.
+
+### Probe 5: the worker is stopped in the middle of a publish, and the restart finishes the job without sending again
+Setup: the database was deleted first, so this run starts from a known state
+(six fresh slots from `seed.py`, no old rows to confuse the counts). Three
+settings were made in the terminal for this demo only:
+
+| Setting | Value | Why |
+|---|---|---|
+| `PUBLISH_ADAPTER_DISCORD` | `mock_x` | publish through the mock, so nothing real is sent |
+| `MOCK_PUBLISH_DELAY_SECONDS` | `4` | each publish takes 4 seconds, which leaves a window to stop the worker while a publish is in progress |
+| `STALE_AFTER_SECONDS` | `5` | a publish still `publishing` after 5 seconds counts as abandoned; it is longer than the 4-second delay so a slow but live publish is not mistaken for a crashed one |
+
+Commands:
+```
+Remove-Item .\social_studio.db
+python seed.py
+python worker.py        # pressed Ctrl+C right after "slot 2 -> succeeded"
+python worker.py        # restarted, left to finish
+```
+
+Worker log, first run (stopped with Ctrl+C):
+```
+2026-11-07 23:17:03,907 INFO worker started; polling every 5 seconds
+2026-11-07 23:17:23,160 INFO slot 1 -> succeeded (sent_now=True)
+2026-11-07 23:17:27,312 INFO slot 2 -> succeeded (sent_now=True)
+2026-11-07 23:17:28,403 INFO worker stopped
+```
+
+Worker log, second run (restart):
+```
+2026-11-07 23:17:38,038 INFO worker started; polling every 5 seconds
+2026-11-07 23:17:38,184 INFO settled 1 stale publish(es)
+2026-11-07 23:17:42,305 INFO slot 4 -> succeeded (sent_now=True)
+2026-11-07 23:17:46,485 INFO slot 5 -> succeeded (sent_now=True)
+2026-11-07 23:17:50,595 INFO slot 6 -> succeeded (sent_now=True)
+```
+
+Command (read the three tables directly after the restart finished):
+```
+python -c "import sqlite3; c=sqlite3.connect('social_studio.db'); c.row_factory=sqlite3.Row; [(print('---', t), [print(dict(r)) for r in c.execute('select * from '+t)]) for t in ('publishes','publish_attempts','mock_posts')]"
+```
+
+Result:
+```
+--- publishes
+{'id': 1, 'variant_id': 1, 'slot_id': 1, 'idempotency_key': 'v1:s1', 'status': 'succeeded', 'started_at': '2026-11-07T18:17:18Z', 'retry_at': None, 'platform_message_id': 'mock_x-1'}
+{'id': 2, 'variant_id': 2, 'slot_id': 2, 'idempotency_key': 'v2:s2', 'status': 'succeeded', 'started_at': '2026-11-07T18:17:23Z', 'retry_at': None, 'platform_message_id': 'mock_linkedin-2'}
+{'id': 3, 'variant_id': 3, 'slot_id': 3, 'idempotency_key': 'v3:s3', 'status': 'succeeded', 'started_at': '2026-11-07T18:17:27Z', 'retry_at': None, 'platform_message_id': 'mock_x-3'}
+{'id': 4, 'variant_id': 4, 'slot_id': 4, 'idempotency_key': 'v4:s4', 'status': 'succeeded', 'started_at': '2026-11-07T18:17:38Z', 'retry_at': None, 'platform_message_id': 'mock_x-4'}
+{'id': 5, 'variant_id': 5, 'slot_id': 5, 'idempotency_key': 'v5:s5', 'status': 'succeeded', 'started_at': '2026-11-07T18:17:42Z', 'retry_at': None, 'platform_message_id': 'mock_linkedin-5'}
+{'id': 6, 'variant_id': 6, 'slot_id': 6, 'idempotency_key': 'v6:s6', 'status': 'succeeded', 'started_at': '2026-11-07T18:17:46Z', 'retry_at': None, 'platform_message_id': 'mock_x-6'}
+--- publish_attempts
+{'id': 1, 'publish_id': 1, 'result': 'posted', 'error': None, 'attempted_at': '2026-11-07 18:17:23'}
+{'id': 2, 'publish_id': 2, 'result': 'posted', 'error': None, 'attempted_at': '2026-11-07 18:17:27'}
+{'id': 3, 'publish_id': 3, 'result': 'recovered', 'error': 'post found after a crash; marked succeeded without re-sending', 'attempted_at': '2026-11-07 18:17:38'}
+{'id': 4, 'publish_id': 4, 'result': 'posted', 'error': None, 'attempted_at': '2026-11-07 18:17:42'}
+{'id': 5, 'publish_id': 5, 'result': 'posted', 'error': None, 'attempted_at': '2026-11-07 18:17:46'}
+{'id': 6, 'publish_id': 6, 'result': 'posted', 'error': None, 'attempted_at': '2026-11-07 18:17:50'}
+--- mock_posts
+{'id': 1, 'adapter': 'mock_x', 'variant_id': 1, 'text': 'Demo post one: Why idempotency matters. #blog', 'idempotency_key': 'v1:s1', 'created_at': '2026-11-07 18:17:19'}
+{'id': 2, 'adapter': 'mock_linkedin', 'variant_id': 2, 'text': 'Demo post one\n\nWhy idempotency matters.\n\n#blog #writing', 'idempotency_key': 'v2:s2', 'created_at': '2026-11-07 18:17:23'}
+{'id': 3, 'adapter': 'mock_x', 'variant_id': 3, 'text': 'Demo post one\n\nWhy idempotency matters.', 'idempotency_key': 'v3:s3', 'created_at': '2026-11-07 18:17:27'}
+{'id': 4, 'adapter': 'mock_x', 'variant_id': 4, 'text': 'Demo post two: Retries without double posts. #blog', 'idempotency_key': 'v4:s4', 'created_at': '2026-11-07 18:17:38'}
+{'id': 5, 'adapter': 'mock_linkedin', 'variant_id': 5, 'text': 'Demo post two\n\nRetries without double posts.\n\n#blog #writing', 'idempotency_key': 'v5:s5', 'created_at': '2026-11-07 18:17:42'}
+{'id': 6, 'adapter': 'mock_x', 'variant_id': 6, 'text': 'Demo post two\n\nRetries without double posts.', 'idempotency_key': 'v6:s6', 'created_at': '2026-11-07 18:17:46'}
+```
+
+How to read it:
+- **Where the crash hit.** The worker log times are local (UTC+5) and the
+  database times are UTC, so `23:17:28` in the log is `18:17:28` in the
+  database. Slot 3's publish started at `18:17:27` and its mock post was
+  written the same second. Ctrl+C came at `18:17:28`, inside slot 3's
+  4-second delay. So the post existed but the publish row was never marked
+  `succeeded`; it was left `publishing`.
+- **Recovery ran.** On restart the first thing logged was `settled 1 stale
+  publish(es)`, and `publish_attempts` has exactly one row with result
+  `recovered` (attempt 3, publish 3). Its note says the post was found and
+  the publish was marked succeeded without re-sending. There is no `slot 3
+  -> succeeded` line in the second run.
+- **Nothing was sent twice.** `mock_posts` has exactly six rows, one per
+  idempotency key `v1:s1` to `v6:s6`, so `v3:s3` appears once. The mock
+  records every send and is not unique on the key, so a re-send would have
+  shown as a seventh row.
+- **Everything finished.** All six `publishes` rows are `succeeded`, and the
+  restart went on to publish slots 4, 5 and 6.
+
+Meaning: a worker stopped in the middle of a publish, after the post was
+sent but before it was recorded, does not lose that slot and does not send it
+again. The restart looks the post up by its idempotency key, finds it, and
+settles the publish. The proof is the `recovered` attempt together with one
+`mock_posts` row for `v3:s3`: the first shows the crash and the recovery path
+really happened, the second shows nothing was sent twice.
+
+Settings cleared afterwards:
+```
+Remove-Item Env:PUBLISH_ADAPTER_DISCORD, Env:MOCK_PUBLISH_DELAY_SECONDS, Env:STALE_AFTER_SECONDS
+```
+
+### What this does not prove
+- **Mock adapter only.** Recovery works here because the mock can be asked
+  whether a post with a given idempotency key already exists. Discord cannot
+  answer that. For the real Discord adapter a crash in this same window is
+  designed to end as `uncertain`, not `succeeded` or `pending`, so a person
+  decides. That path has not been run.
+- **One crash window.** The crash was after the post was recorded and before
+  the publish was marked `succeeded`. A crash before the adapter call (nothing
+  sent) was not tested.
+- **A polite stop, not a hard kill.** Ctrl+C lets the worker log `worker
+  stopped`. A forced kill of the process was not tested.
+- **One worker.** Two workers running at the same time were not tested.
 
 ## 7. Publish history
-**Status:** endpoints proven; will extend after the worker runs.
+**Status:** endpoints proven over HTTP; the recovery case is shown in
+section 6 (read from the database, not through the endpoints).
 
 ### Every publish and every attempt is visible
 Commands:
@@ -417,9 +546,66 @@ adding a second publish row.
 
 
 ## 8. Secrets clean
-Pending: `.env` is git-ignored and `.env.example` holds placeholders only.
-Will add a `git status` / `git ls-files` transcript showing no `.env` is
-tracked.
+**Status:** proven. `.env` and database files are git-ignored and not
+tracked, and `.env.example` holds placeholders only.
+
+### The real `.env` and the database are ignored
+Command:
+```
+git check-ignore -v .env social_studio.db
+```
+Result:
+```
+.gitignore:1:.env       .env
+.gitignore:2:*.db       social_studio.db
+```
+Meaning: `.gitignore` line 1 covers `.env` (which holds the real Discord
+webhook URL) and line 2 covers every `*.db` file, so neither can be added by
+accident.
+
+### Nothing secret is tracked
+Command:
+```
+git ls-files | Select-String "\.env|\.db"
+```
+Result:
+```
+.env.example
+```
+Meaning: of every file git tracks, the only match for `.env` or `.db` is
+`.env.example`. No `.env` and no database file is in the repository.
+`.gitignore` only stops new files from being added, so this listing, not the
+ignore rule alone, is the proof that nothing was committed earlier.
+
+### `.env.example` holds placeholders only
+Command:
+```
+Get-Content .env.example
+```
+Result:
+```
+DISCORD_WEBHOOK_URL=your-webhook-url-here
+
+DATABASE_PATH=social_studio.db
+BUSY_TIMEOUT_SECONDS=5
+
+PUBLISH_ADAPTER_X=mock_x
+PUBLISH_ADAPTER_LINKEDIN=mock_linkedin
+PUBLISH_ADAPTER_DISCORD=discord
+
+STALE_AFTER_SECONDS=300
+POLL_INTERVAL_SECONDS=5
+
+MOCK_PUBLISH_DELAY_SECONDS=0
+```
+Meaning: the only secret-shaped value, the webhook URL, is a placeholder.
+Every other line is a harmless setting with its default. A new reader copies
+this file to `.env` and fills in their own webhook URL.
+
+Note: the Probe 5 demo in section 6 overrode three of these settings
+(`PUBLISH_ADAPTER_DISCORD`, `MOCK_PUBLISH_DELAY_SECONDS`,
+`STALE_AFTER_SECONDS`) for one terminal session only; the defaults above were
+not edited.
 
 ## 9. README with architecture diagram and one-command run
 Pending.
