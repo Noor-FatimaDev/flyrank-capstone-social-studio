@@ -228,5 +228,49 @@ This log records where AI helped, where it was wrong, and what I changed.
   caller could point it at internal addresses. Fine on my own machine, not
   fine to deploy as it is.
 
+## Phase 7: README, one-command run, and the stranger test
+
+**Where AI helped**
+- Read the brief PDF with me and found a gap in my README: the system is two
+  programs (the API and the worker), but the brief wants "one run command plus
+  a seed step". It proposed three fixes; I chose `run.py`, which sets up the
+  database and starts both as separate processes.
+- Wrote `run.py`, the README with exact commands for all six acceptance
+  probes, and EVIDENCE.md section 9.
+
+**What I decided myself**
+- `run.py` as a separate launcher, not the worker inside the API process. I
+  first picked the second option without a reason, then changed my mind
+  because Probe 5 says "stop the worker mid-publish", which needs the worker
+  to be its own process, and because changing `main.py` would have meant
+  re-proving Probe 5.
+
+**What went wrong, and what I did**
+- To prove the README, I cloned the repo into a new empty folder and followed
+  it as a stranger would. Everything passed, but the test found two problems.
+- **The worker log printed my Discord webhook address.** The HTTP library
+  logs every request address at INFO level, and a webhook address contains its
+  secret token. It never reached the repo (the logs were only in my terminal),
+  but I had pasted a log into a chat. Fix: I set the `httpx` logger to WARNING
+  in `worker.py`, and I rotated the webhook, which means deleting it and
+  creating a new one. AI had told me to keep the webhook out of chat, but
+  neither of us thought about the logs printing it.
+- **I deleted `social_studio.db` while `run.py` was still running**, twice.
+  The worker failed with `no such table`, and `run.py` stopped both
+  processes. That was my mistake, not a bug: the README already said to stop
+  it first. I made that warning bold.
+- AI's README told me to press Ctrl+C after slot 2 in the crash demo. In the
+  fresh run I pressed it after slot 3, so slot 4 was the one stopped
+  mid-publish and recovered. Both prove the same thing, so I changed the
+  README to say "after any slot line".
+- I forgot to clear a setting between runs (`Remove-Item Env:...` said the
+  variable did not exist). It was harmless, because it only printed an error.
+
+**What I learned**
+- Testing as a stranger caught things my own testing never did, because my own
+  folder had old settings, an old database and a warm environment.
+- Secrets can leak through logs, not just through commits. Checking `.env` and
+  `git ls-files` was not enough.
+
 ## Still to log
-- README and the final walk through the Requirements boxes
+- Nothing. The last step is to submit the repo link on the portal.

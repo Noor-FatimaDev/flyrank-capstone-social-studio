@@ -608,4 +608,93 @@ Note: the Probe 5 demo in section 6 overrode three of these settings
 not edited.
 
 ## 9. README with architecture diagram and one-command run
-Pending.
+**Status:** proven by a stranger test: a fresh clone of the repo, following
+only the README.
+
+### A fresh clone runs from the README alone
+Setup: I cloned the public repo into a new empty folder and followed the
+README from the top: create a virtual environment, `pip install -r
+requirements.txt`, `copy .env.example .env`, then put my own webhook in the
+new `.env`.
+
+Commands (the second one in a second terminal):
+```
+python run.py
+python seed.py
+```
+Results, first terminal:
+```
+Database initialised.
+INFO worker started; polling every 5 seconds
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+...
+INFO slot 1 -> succeeded (sent_now=True)
+INFO slot 2 -> succeeded (sent_now=True)
+INFO slot 3 -> succeeded (sent_now=True)
+INFO slot 4 -> succeeded (sent_now=True)
+INFO slot 5 -> succeeded (sent_now=True)
+INFO slot 6 -> succeeded (sent_now=True)
+```
+Result, second terminal: `Seeded 6 slots due at ...: [1, 2, 3, 4, 5, 6]`.
+
+Command and result (publish history after the seed):
+```
+curl.exe -i http://127.0.0.1:8000/publishes
+```
+Six publishes, all `succeeded`. Publishes 3 and 6 (the discord variants) carry
+Discord message ids (`1571984682390913075` and `1571984691584704533`); the
+other four carry mock ids (`mock_x-1`, `mock_linkedin-2`, `mock_x-3`,
+`mock_linkedin-4`).
+
+Meaning: one command creates the database tables and starts the API and the
+worker; one more command seeds sample data; the worker publishes it. Ctrl+C
+stops both (`run.py: stopping`, `worker stopped`, `Shutting down`).
+
+### The six acceptance probes, run from the README on a fresh database
+All probes below used the exact commands in the README.
+
+| Probe | Result |
+|---|---|
+| 1. Ingest and generate | `201 {"id":1}`, then three variants created (x, linkedin, discord), `"blocked":[]` |
+| 2. Rule-breaker blocked | `blocked`: x and linkedin, each `tone: 2 exclamation marks exceeds the ... limit of 1`; discord variant 4 created |
+| 3. Unapproved refused | `409 Conflict`: `Variant 1 is draft; only approved variants can be scheduled` |
+| 4. Real publish | variant 3 approved, scheduled two minutes out (`slot_id` 1); `GET /publishes` shows `v3:s1` `succeeded` with Discord's `platform_message_id` `1571986976163496029` |
+| 5. Crash and restart | see below |
+| 6. Adapter swap | with `PUBLISH_ADAPTER_DISCORD=mock_x`, variant 4 (slot 2) published; `mock_posts` holds one record from adapter `mock_x` (`v4:s2`), no Discord request in the log |
+
+Probe 4, worker log line (the webhook address is removed here):
+```
+INFO HTTP Request: POST https://discord.com/api/webhooks/<removed>?wait=true "HTTP/1.1 200 OK"
+INFO slot 1 -> succeeded (sent_now=True)
+```
+
+Probe 5, worker logs (first run stopped with Ctrl+C right after slot 3
+succeeded, so slot 4 was mid-publish):
+```
+INFO worker started; polling every 5 seconds
+INFO slot 1 -> succeeded (sent_now=True)
+INFO slot 2 -> succeeded (sent_now=True)
+INFO slot 3 -> succeeded (sent_now=True)
+INFO worker stopped
+
+INFO worker started; polling every 5 seconds
+INFO settled 1 stale publish(es)
+INFO slot 5 -> succeeded (sent_now=True)
+INFO slot 6 -> succeeded (sent_now=True)
+```
+Database check afterwards: six `publishes` rows all `succeeded`, six
+`mock_posts` rows (one per key `v1:s1` to `v6:s6`), and exactly one
+`recovered` attempt (publish 4: post found after a crash, marked succeeded
+without re-sending). This is the same result as section 6, reached from a
+fresh clone, with the crash one slot later than before.
+
+### Problems this test found
+- **The webhook address was printed in the worker log.** The HTTP library logs
+  every request address at INFO level, and a Discord webhook address contains
+  its secret token. Fix: set the `httpx` logger to WARNING so the address is
+  not logged, and rotate the webhook, because the address had been shown in
+  my terminal output.
+- **Deleting `social_studio.db` while `run.py` is running** makes the worker
+  fail with `no such table`, and `run.py` then stops both processes. This
+  happened to me twice. It is not a fault in normal use, so the README tells
+  the reviewer to stop `run.py` before deleting the database.

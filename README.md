@@ -120,6 +120,10 @@ database** (stop `run.py`, delete `social_studio.db`, start `python run.py`
 again, and do not run `seed.py`), because the ids below assume an empty
 database. If your ids differ, use the ids in each response.
 
+**Always stop `run.py` (Ctrl+C) before deleting `social_studio.db`.** If the
+database disappears while it is running, the worker fails with `no such
+table` and `run.py` stops everything.
+
 Run these in a second PowerShell terminal.
 
 **Probe 1: ingest a post, get a variant per platform.**
@@ -215,9 +219,13 @@ $env:MOCK_PUBLISH_DELAY_SECONDS = "4"
 $env:STALE_AFTER_SECONDS = "5"
 
 python seed.py
-python worker.py     # press Ctrl+C right after "slot 2 -> succeeded"
+python worker.py     # press Ctrl+C within 2 seconds after any "slot N -> succeeded" line
 python worker.py     # restart: logs "settled 1 stale publish(es)"
 ```
+
+Each publish takes 4 seconds here, so the slot after the one you just saw
+succeed is mid-publish when you press Ctrl+C. That is the slot the restart
+recovers.
 
 Then clear the settings:
 
